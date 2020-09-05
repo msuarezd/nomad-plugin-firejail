@@ -1,13 +1,15 @@
 job "example" {
   datacenters = ["dc1"]
-  type        = "batch"
+  type        = "service"
 
   group "example" {
-    task "hello-world" {
-      driver = "hello-world-example"
+    task "sleep" {
+      driver = "firejail"
 
       config {
-        greeting = "hello"
+        options = ["-shell=none"]
+        command = "/bin/sleep"
+        args    = ["6000"]
       }
     }
   }

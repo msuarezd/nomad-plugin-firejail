@@ -1,14 +1,16 @@
 package firejail
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
-	//"os/exec"
+	"os/exec"
 	"path/filepath"
 	//"regexp"
-	"time"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/consul-template/signals"
 	"github.com/hashicorp/go-hclog"
@@ -56,22 +58,9 @@ var (
 	// on the client.
 	// this is not global, but can be specified on a per-client basis.
 	configSpec = hclspec.NewObject(map[string]*hclspec.Spec{
-		// TODO: define plugin's agent configuration schema.
-		//
-		// The schema should be defined using HCL specs and it will be used to
-		// validate the agent configuration provided by the user in the
-		// `plugin` stanza (https://www.nomadproject.io/docs/configuration/plugin.html).
-		//
-		// For example, for the schema below a valid configuration would be:
-		//
-		//   plugin "hello-driver-plugin" {
-		//     config {
-		//       shell = "fish"
-		//     }
-		//   }
-		"shell": hclspec.NewDefault(
-			hclspec.NewAttr("shell", "string", false),
-			hclspec.NewLiteral(`"bash"`),
+		"firejail_path": hclspec.NewDefault(
+			hclspec.NewAttr("firejail_path", "string", false),
+			hclspec.NewLiteral(`""`),
 		),
 	})
 
@@ -80,8 +69,9 @@ var (
 	// this is used to validated the configuration specified for the plugin
 	// when a job is submitted.
 	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
+		"options": hclspec.NewAttr("options", "list(string)", false),
 		"command": hclspec.NewAttr("command", "string", true),
-		"args": hclspec.NewAttr("args","list(string)", false),
+		"args":    hclspec.NewAttr("args", "list(string)", false),
 	})
 
 	// capabilities indicates what optional features this driver supports
@@ -99,24 +89,15 @@ var (
 
 // Config contains configuration information for the plugin
 type Config struct {
-	// TODO: create decoded plugin configuration struct
-	//
-	// This struct is the decoded version of the schema defined in the
-	// configSpec variable above. It's used to convert the HCL configuration
-	// passed by the Nomad agent into Go contructs.
-	Shell string `codec:"shell"`
+	FirejailPath string `codec:"firejail_path"`
 }
 
 // TaskConfig contains configuration information for a task that runs with
 // this plugin
 type TaskConfig struct {
-	// TODO: create decoded plugin task configuration struct
-	//
-	// This struct is the decoded version of the schema defined in the
-	// taskConfigSpec variable above. It's used to convert the string
-	// configuration for the task into Go contructs.
-	Command string `codec:"command"`
-	Args []string `codec:"args"`
+	Options []string `codec:"options"`
+	Command string   `codec:"command"`
+	Args    []string `codec:"args"`
 }
 
 // TaskState is the runtime state which is encoded in the handle returned to
@@ -204,29 +185,26 @@ func (d *FirejailDriverPlugin) SetConfig(cfg *base.Config) error {
 	// Save the configuration to the plugin
 	d.config = &config
 
-	// TODO: parse and validated any configuration value if necessary.
-	//
-	// If your driver agent configuration requires any complex validation
-	// (some dependency between attributes) or special data parsing (the
-	// string "10s" into a time.Interval) you can do it here and update the
-	// value in d.config.
-	//
-	// In the example below we check if the shell specified by the user is
-	// supported by the plugin.
-	shell := d.config.Shell
-	if shell != "bash" && shell != "fish" {
-		return fmt.Errorf("invalid shell %s", d.config.Shell)
+	// Validate configuration
+	if d.config.FirejailPath == "" {
+		bin, err := GetAbsolutePath("firejail")
+		if err != nil {
+			return fmt.Errorf("failed to find firejail binary: %s", err)
+		}
+		d.config.FirejailPath = bin
+	} else {
+		if strings.HasPrefix(d.config.FirejailPath, "/") {
+			return fmt.Errorf("The path to firejail must be absolute: %s", d.config.FirejailPath)
+		}
+	}
+	if _, err := os.Stat(d.config.FirejailPath); err != nil {
+		return fmt.Errorf("Error looking for firejail: %s", err)
 	}
 
 	// Save the Nomad agent configuration
 	if cfg.AgentConfig != nil {
 		d.nomadConfig = cfg.AgentConfig.Driver
 	}
-
-	// TODO: initialize any extra requirements if necessary.
-	//
-	// Here you can use the config values to initialize any resources that are
-	// shared by all tasks that use this driver, such as a daemon process.
 
 	return nil
 }
@@ -278,41 +256,31 @@ func (d *FirejailDriverPlugin) buildFingerprint() *drivers.Fingerprint {
 		HealthDescription: drivers.DriverHealthy,
 	}
 
-	// TODO: implement fingerprinting logic to populate health and driver
-	// attributes.
-	//
-	// Fingerprinting is used by the plugin to relay two important information
-	// to Nomad: health state and node attributes.
-	//
-	// If the plugin reports to be unhealthy, or doesn't send any fingerprint
-	// data in the expected interval of time, Nomad will restart it.
-	//
-	// Node attributes can be used to report any relevant information about
-	// the node in which the plugin is running (specific library availability,
-	// installed versions of a software etc.). These attributes can then be
-	// used by an operator to set job constrains.
-	//
-	// In the example below we check if the shell specified by the user exists
-	// in the node.
-    
-    // Buscar firejail e a version
-
-    if runtime.GOOS == "linux" {
-	    version, err := firejailVersionInfo()
-	    if err != nil{
-	        fp.Health = drivers.HealthStateUndetected
-		    fp.HealthDescription = ""
-		    return fp
-	    }
-	    fp.Attributes["driver.firejail"] = structs.NewBoolAttribute(true)
-	    fp.Attributes["driver.firejail.version"] = structs.NewStringAttribute(version)
+	if runtime.GOOS == "linux" {
+		//version, err := firejailVersionInfo()
+		var out bytes.Buffer
+		cmd := exec.Command(d.config.FirejailPath, "--version")
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		if err != nil {
+			fp.Health = drivers.HealthStateUndetected
+			fp.HealthDescription = ""
+			return fp
+		}
+		version := parseFirejailVersionOutput(out.String())
+		fp.Attributes["driver.firejail"] = structs.NewBoolAttribute(true)
+		fp.Attributes["driver.firejail.plugin_version"] = structs.NewStringAttribute(pluginVersion)
+		fp.Attributes["driver.firejail.firejail_version"] = structs.NewStringAttribute(version)
+		fp.Attributes["driver.firejail.firejail_path"] = structs.NewStringAttribute(d.config.FirejailPath)
+		return fp
 	} else {
 		// Not a linux system.
 		fp.Health = drivers.HealthStateUndetected
 		fp.HealthDescription = ""
 		return fp
 	}
-	return fp
+
 }
 
 // StartTask returns a task handle and a driver network if necessary.
@@ -330,47 +298,47 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 	handle := drivers.NewTaskHandle(taskHandleVersion)
 	handle.Config = cfg
 
-	// TODO: implement driver specific mechanism to start the task.
-	//
-	// Once the task is started you will need to store any relevant runtime
-	// information in a taskHandle and TaskState. The taskHandle will be
-	// stored in-memory in the plugin and will be used to interact with the
-	// task.
-	//
-	// The TaskState will be returned to the Nomad client inside a
-	// drivers.TaskHandle instance. This TaskHandle will be sent back to plugin
-	// if the task ever needs to be recovered, so the TaskState should contain
-	// enough information to handle that.
-	//
-	// In the example below we use an executor to fork a process to run our
-	// greeter. The executor is then stored in the handle so we can access it
-	// later and the the plugin.Client is used to generate a reattach
-	// configuration that can be used to recover communication with the task.
 	executorConfig := &executor.ExecutorConfig{
 		LogFile:  filepath.Join(cfg.TaskDir().Dir, "executor.out"),
 		LogLevel: "debug",
 	}
 
-	exec, pluginClient, err := executor.CreateExecutor(d.logger, d.nomadConfig, executorConfig)
+	exec, pluginClient, err := executor.CreateExecutor(
+		d.logger.With("task_name", handle.Config.Name, "alloc_id", handle.Config.AllocID),
+		d.nomadConfig, executorConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create executor: %v", err)
 	}
 
-	//echoCmd := fmt.Sprintf(`echo "%s"`, driverConfig.Greeting)
-	bin,err := GetAbsolutePath("firejail")
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to find firejail binary: %s", err)
+	//bin, err := GetAbsolutePath("firejail")
+	//if err != nil {
+	//	return nil, nil, fmt.Errorf("failed to find firejail binary: %s", err)
+	//}
+
+	// Firejail never allows user nobody thus we default to daemon
+	// See man firejail-users for more information
+	user := cfg.User
+	if user == "" {
+		user = "daemon"
 	}
 
 	var cmd []string
-	cmd=append(cmd,"--")
-	cmd=append(cmd,driverConfig.Command)
-	cmd=append(cmd,driverConfig.Args...)
+	cmd = append(cmd, driverConfig.Options...)
+	cmd = append(cmd, "--")
+	cmd = append(cmd, driverConfig.Command)
+	cmd = append(cmd, driverConfig.Args...)
+
 	execCmd := &executor.ExecCommand{
-		Cmd:        bin,
-		Args:       cmd,
-		StdoutPath: cfg.StdoutPath,
-		StderrPath: cfg.StderrPath,
+		Cmd:              d.config.FirejailPath,
+		Args:             cmd,
+		Env:              cfg.EnvList(),
+		User:             user,
+		ResourceLimits:   true,
+		Resources:        cfg.Resources,
+		TaskDir:          cfg.TaskDir().Dir,
+		StdoutPath:       cfg.StdoutPath,
+		StderrPath:       cfg.StderrPath,
+		NetworkIsolation: cfg.NetworkIsolation,
 	}
 
 	ps, err := exec.Launch(execCmd)
@@ -397,6 +365,9 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 	}
 
 	if err := handle.SetDriverState(&driverState); err != nil {
+		d.logger.Error("failed to start task, error setting driver state", "error", err)
+		exec.Shutdown("", 0)
+		pluginClient.Kill()
 		return nil, nil, fmt.Errorf("failed to set driver state: %v", err)
 	}
 
@@ -412,11 +383,16 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 	}
 
 	if _, ok := d.tasks.Get(handle.Config.ID); ok {
+		d.logger.Trace("nothing to recover; task already exists",
+			"task_id", handle.Config.ID,
+			"task_name", handle.Config.Name,
+		)
 		return nil
 	}
 
 	var taskState TaskState
 	if err := handle.GetDriverState(&taskState); err != nil {
+		d.logger.Error("failed to decode task state from handle", "error", err, "task_id", handle.Config.ID)
 		return fmt.Errorf("failed to decode task state from handle: %v", err)
 	}
 
@@ -434,11 +410,14 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 	// that was created when the task first started.
 	plugRC, err := structs.ReattachConfigToGoPlugin(taskState.ReattachConfig)
 	if err != nil {
+		d.logger.Error("failed to build ReattachConfig from task state", "error", err, "task_id", handle.Config.ID)
 		return fmt.Errorf("failed to build ReattachConfig from taskConfig state: %v", err)
 	}
 
-	execImpl, pluginClient, err := executor.ReattachToExecutor(plugRC, d.logger)
+	execImpl, pluginClient, err := executor.ReattachToExecutor(plugRC,
+		d.logger.With("task_name", handle.Config.Name, "alloc_id", handle.Config.AllocID))
 	if err != nil {
+		d.logger.Error("failed to reattach to executor", "error", err, "task_id", handle.Config.ID)
 		return fmt.Errorf("failed to reattach to executor: %v", err)
 	}
 
@@ -450,6 +429,7 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 		procState:    drivers.TaskStateRunning,
 		startedAt:    taskState.StartedAt,
 		exitResult:   &drivers.ExitResult{},
+		logger:       d.logger,
 	}
 
 	d.tasks.Set(taskState.TaskConfig.ID, h)

@@ -1,7 +1,6 @@
-log_level = "TRACE"
 
-plugin "hello-driver" {
+plugin "firejail" {
   config {
-    shell = "bash"
+    firejail_path = "/usr/bin/firejail"
   }
 }

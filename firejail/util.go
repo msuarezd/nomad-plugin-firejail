@@ -1,28 +1,12 @@
 package firejail
 
 import (
-	"bytes"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
-	"path/filepath"
 )
-
-
-func firejailVersionInfo() (version string, err error) {
-	var out bytes.Buffer
-	cmd := exec.Command("firejail", "--version")
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err = cmd.Run()
-	if err != nil {
-		err = fmt.Errorf("failed to check firejail version: %v", err)
-		return
-	}
-	version = parseFirejailVersionOutput(out.String())
-	return
-}
 
 func parseFirejailVersionOutput(infoString string) (version string) {
 	infoString = strings.TrimSpace(infoString)
@@ -32,10 +16,9 @@ func parseFirejailVersionOutput(infoString string) (version string) {
 	versionString := strings.TrimSpace(lines[0])
 
 	re := regexp.MustCompile(`firejail version ([0-9].*)$`)
-	if match := re.FindStringSubmatch(lines[0]); len(match) == 1 {
-		versionString = match[0]
+	if match := re.FindStringSubmatch(lines[0]); len(match) > 0 {
+		versionString = match[1]
 	}
-
 	return versionString
 }
 
