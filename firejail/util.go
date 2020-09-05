@@ -6,12 +6,13 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"path/filepath"
 )
 
 
-func firejailVersionInfo() (version) {
+func firejailVersionInfo() (version string, err error) {
 	var out bytes.Buffer
-	cmd := exec.Command("firejail", "--version"...)
+	cmd := exec.Command("firejail", "--version")
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err = cmd.Run()
@@ -23,7 +24,7 @@ func firejailVersionInfo() (version) {
 	return
 }
 
-func parseFirejailVersionOutput(infoString string) (version) {
+func parseFirejailVersionOutput(infoString string) (version string) {
 	infoString = strings.TrimSpace(infoString)
 
 	lines := strings.Split(infoString, "\n")
@@ -31,7 +32,7 @@ func parseFirejailVersionOutput(infoString string) (version) {
 	versionString := strings.TrimSpace(lines[0])
 
 	re := regexp.MustCompile(`firejail version ([0-9].*)$`)
-	if match := re.FindStringSubmatch(lines[0]){
+	if match := re.FindStringSubmatch(lines[0]); len(match) == 1 {
 		versionString = match[0]
 	}
 

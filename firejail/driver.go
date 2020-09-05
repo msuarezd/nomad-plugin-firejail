@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
+	//"os/exec"
 	"path/filepath"
-	"regexp"
+	//"regexp"
 	"time"
+	"runtime"
 
 	"github.com/hashicorp/consul-template/signals"
 	"github.com/hashicorp/go-hclog"
@@ -79,8 +80,8 @@ var (
 	// this is used to validated the configuration specified for the plugin
 	// when a job is submitted.
 	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
-		"command": hclspec.NewAttr("command", "string", true)
-		"args": hclspec.NewAttr("args","list(string", false)
+		"command": hclspec.NewAttr("command", "string", true),
+		"args": hclspec.NewAttr("args","list(string)", false),
 	})
 
 	// capabilities indicates what optional features this driver supports
@@ -115,7 +116,7 @@ type TaskConfig struct {
 	// taskConfigSpec variable above. It's used to convert the string
 	// configuration for the task into Go contructs.
 	Command string `codec:"command"`
-	Args string `codec:"args"`
+	Args []string `codec:"args"`
 }
 
 // TaskState is the runtime state which is encoded in the handle returned to
@@ -299,14 +300,13 @@ func (d *FirejailDriverPlugin) buildFingerprint() *drivers.Fingerprint {
     if runtime.GOOS == "linux" {
 	    version, err := firejailVersionInfo()
 	    if err != nil{
-	        p.Health = drivers.HealthStateUndetected
+	        fp.Health = drivers.HealthStateUndetected
 		    fp.HealthDescription = ""
 		    return fp
 	    }
-	    fp.Attributes[driverAttr] = pstructs.NewBoolAttribute(true)
-	    fp.Attributes[driverVersionAttr] = pstructs.NewStringAttribute(version)
-    }
-	else{
+	    fp.Attributes["driver.firejail"] = structs.NewBoolAttribute(true)
+	    fp.Attributes["driver.firejail.version"] = structs.NewStringAttribute(version)
+	} else {
 		// Not a linux system.
 		fp.Health = drivers.HealthStateUndetected
 		fp.HealthDescription = ""
@@ -361,9 +361,14 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find firejail binary: %s", err)
 	}
+
+	var cmd []string
+	cmd=append(cmd,"--")
+	cmd=append(cmd,driverConfig.Command)
+	cmd=append(cmd,driverConfig.Args...)
 	execCmd := &executor.ExecCommand{
 		Cmd:        bin,
-		Args:       []string{command, args},
+		Args:       cmd,
 		StdoutPath: cfg.StdoutPath,
 		StderrPath: cfg.StderrPath,
 	}
@@ -454,7 +459,7 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 }
 
 // WaitTask returns a channel used to notify Nomad when a task exits.
-func (d *FirejailsDriverPlugin) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.ExitResult, error) {
+func (d *FirejailDriverPlugin) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.ExitResult, error) {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
