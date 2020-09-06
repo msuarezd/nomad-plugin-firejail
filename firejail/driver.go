@@ -84,6 +84,10 @@ var (
 		// https://godoc.org/github.com/hashicorp/nomad/plugins/drivers#Capabilities
 		SendSignals: true,
 		Exec:        false,
+		NetIsolationModes: []drivers.NetIsolationMode{
+			drivers.NetIsolationModeHost,
+			drivers.NetIsolationModeGroup,
+		},
 	}
 )
 
