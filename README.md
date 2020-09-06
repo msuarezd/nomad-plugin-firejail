@@ -65,7 +65,7 @@ options = ["--profile", "local/firejail.profile"]
 
 
 ## Motivation
-Firejail allows to isolate the running environment of your jobs using all usual linux kernel features (namespaces, seccomp-bpf, capabilities) without having to use a (docker) container. It is lightweight and can work wit SELinux or Apparmor. This allows you to do the same as the raw_exec or exec driver (without the chroot overhead) and with flexibility in the way you want to secure the running environment of your task. 
+Firejail allows to isolate the running environment of your jobs using all usual linux kernel features (namespaces, seccomp-bpf, capabilities) without having to use a (docker) container image. It is lightweight and can work wit SELinux or Apparmor. This allows you to do the same as the raw_exec or exec driver (without the chroot overhead) and with flexibility in the way you want to secure the running environment of your task. 
 
 For more information on firejail see the firejail documentation. Firejail is included in all major linux distributions.
 
