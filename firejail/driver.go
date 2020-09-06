@@ -77,11 +77,6 @@ var (
 	// capabilities indicates what optional features this driver supports
 	// this should be set according to the target run time.
 	capabilities = &drivers.Capabilities{
-		// TODO: set plugin's capabilities
-		//
-		// The plugin's capabilities signal Nomad which extra functionalities
-		// are supported. For a list of available options check the docs page:
-		// https://godoc.org/github.com/hashicorp/nomad/plugins/drivers#Capabilities
 		SendSignals: true,
 		Exec:        false,
 		NetIsolationModes: []drivers.NetIsolationMode{
@@ -112,16 +107,7 @@ type TaskState struct {
 	ReattachConfig *structs.ReattachConfig
 	TaskConfig     *drivers.TaskConfig
 	StartedAt      time.Time
-
-	// TODO: add any extra important values that must be persisted in order
-	// to restore a task.
-	//
-	// The plugin keeps track of its running tasks in a in-memory data
-	// structure. If the plugin crashes, this data will be lost, so Nomad
-	// will respawn a new instance of the plugin and try to restore its
-	// in-memory representation of the running tasks using the RecoverTask()
-	// method below.
-	Pid int
+	Pid            int
 }
 
 // HelloDriverPlugin is an example driver plugin. When provisioned in a job,
@@ -261,30 +247,27 @@ func (d *FirejailDriverPlugin) buildFingerprint() *drivers.Fingerprint {
 	}
 
 	if runtime.GOOS == "linux" {
-		//version, err := firejailVersionInfo()
-		var out bytes.Buffer
-		cmd := exec.Command(d.config.FirejailPath, "--version")
-		cmd.Stdout = &out
-		cmd.Stderr = &out
-		err := cmd.Run()
-		if err != nil {
-			fp.Health = drivers.HealthStateUndetected
-			fp.HealthDescription = ""
-			return fp
-		}
-		version := parseFirejailVersionOutput(out.String())
-		fp.Attributes["driver.firejail"] = structs.NewBoolAttribute(true)
-		fp.Attributes["driver.firejail.plugin_version"] = structs.NewStringAttribute(pluginVersion)
-		fp.Attributes["driver.firejail.firejail_version"] = structs.NewStringAttribute(version)
-		fp.Attributes["driver.firejail.firejail_path"] = structs.NewStringAttribute(d.config.FirejailPath)
+		fp.Health = drivers.HealthStateUndetected
+		fp.HealthDescription = "firejail driver only supported on Linux"
 		return fp
-	} else {
-		// Not a linux system.
+	}
+
+	var out bytes.Buffer
+	cmd := exec.Command(d.config.FirejailPath, "--version")
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	if err != nil {
 		fp.Health = drivers.HealthStateUndetected
 		fp.HealthDescription = ""
 		return fp
 	}
-
+	version := parseFirejailVersionOutput(out.String())
+	fp.Attributes["driver.firejail"] = structs.NewBoolAttribute(true)
+	fp.Attributes["driver.firejail.plugin_version"] = structs.NewStringAttribute(pluginVersion)
+	fp.Attributes["driver.firejail.firejail_version"] = structs.NewStringAttribute(version)
+	fp.Attributes["driver.firejail.firejail_path"] = structs.NewStringAttribute(d.config.FirejailPath)
+	return fp
 }
 
 // StartTask returns a task handle and a driver network if necessary.
@@ -313,11 +296,6 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create executor: %v", err)
 	}
-
-	//bin, err := GetAbsolutePath("firejail")
-	//if err != nil {
-	//	return nil, nil, fmt.Errorf("failed to find firejail binary: %s", err)
-	//}
 
 	// Firejail never allows user nobody thus we default to daemon
 	// See man firejail-users for more information
@@ -350,6 +328,7 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 		pluginClient.Kill()
 		return nil, nil, fmt.Errorf("failed to launch command with executor: %v", err)
 	}
+	d.logger.Info("task started with pid %d", ps.Pid)
 
 	h := &taskHandle{
 		exec:         exec,
@@ -383,6 +362,7 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 // RecoverTask recreates the in-memory state of a task from a TaskHandle.
 func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 	if handle == nil {
+		d.logger.Error("handle cannot be nil")
 		return fmt.Errorf("error: handle cannot be nil")
 	}
 
@@ -405,13 +385,6 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 		return fmt.Errorf("failed to decode driver config: %v", err)
 	}
 
-	// TODO: implement driver specific logic to recover a task.
-	//
-	// Recovering a task involves recreating and storing a taskHandle as if the
-	// task was just started.
-	//
-	// In the example below we use the executor to re-attach to the process
-	// that was created when the task first started.
 	plugRC, err := structs.ReattachConfigToGoPlugin(taskState.ReattachConfig)
 	if err != nil {
 		d.logger.Error("failed to build ReattachConfig from task state", "error", err, "task_id", handle.Config.ID)
@@ -433,7 +406,6 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 		procState:    drivers.TaskStateRunning,
 		startedAt:    taskState.StartedAt,
 		exitResult:   &drivers.ExitResult{},
-		logger:       d.logger,
 	}
 
 	d.tasks.Set(taskState.TaskConfig.ID, h)
@@ -457,17 +429,6 @@ func (d *FirejailDriverPlugin) WaitTask(ctx context.Context, taskID string) (<-c
 func (d *FirejailDriverPlugin) handleWait(ctx context.Context, handle *taskHandle, ch chan *drivers.ExitResult) {
 	defer close(ch)
 	var result *drivers.ExitResult
-
-	// TODO: implement driver specific logic to notify Nomad the task has been
-	// completed and what was the exit result.
-	//
-	// When a result is sent in the result channel Nomad will stop the task and
-	// emit an event that an operator can use to get an insight on why the task
-	// stopped.
-	//
-	// In the example below we block and wait until the executor finishes
-	// running, at which point we send the exit code and signal in the result
-	// channel.
 	ps, err := handle.exec.Wait(ctx)
 	if err != nil {
 		result = &drivers.ExitResult{
@@ -497,16 +458,6 @@ func (d *FirejailDriverPlugin) StopTask(taskID string, timeout time.Duration, si
 	if !ok {
 		return drivers.ErrTaskNotFound
 	}
-
-	// TODO: implement driver specific logic to stop a task.
-	//
-	// The StopTask function is expected to stop a running task by sending the
-	// given signal to it. If the task does not stop during the given timeout,
-	// the driver must forcefully kill the task.
-	//
-	// In the example below we let the executor handle the task shutdown
-	// process for us, but you might need to customize this for your own
-	// implementation.
 	if err := handle.exec.Shutdown(signal, timeout); err != nil {
 		if handle.pluginClient.Exited() {
 			return nil
@@ -528,14 +479,6 @@ func (d *FirejailDriverPlugin) DestroyTask(taskID string, force bool) error {
 		return fmt.Errorf("cannot destroy running task")
 	}
 
-	// TODO: implement driver specific logic to destroy a complete task.
-	//
-	// Destroying a task includes removing any resources used by task and any
-	// local references in the plugin. If force is set to true the task should
-	// be destroyed even if it's currently running.
-	//
-	// In the example below we use the executor to force shutdown the task
-	// (timeout equals 0).
 	if !handle.pluginClient.Exited() {
 		if err := handle.exec.Shutdown("", 0); err != nil {
 			handle.logger.Error("destroying executor failed", "err", err)
