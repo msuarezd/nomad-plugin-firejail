@@ -138,7 +138,7 @@ type FirejailDriverPlugin struct {
 	logger log.Logger
 }
 
-// NewPlugin returns a new example driver plugin
+// NewPlugin returns a new firejail driver plugin
 func NewPlugin(logger log.Logger) drivers.DriverPlugin {
 	ctx, cancel := context.WithCancel(context.Background())
 	logger = logger.Named(pluginName)
