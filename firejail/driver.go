@@ -75,7 +75,7 @@ var (
 	})
 
 	// capabilities indicates what optional features this driver supports
-	// this should be set according to the target run time.
+	// this should be set according to the target run time.$ nomad alloc exec -i -t -task sleep 083e9b3b /usr/bin/whoami
 	capabilities = &drivers.Capabilities{
 		SendSignals: true,
 		Exec:        false,
@@ -246,7 +246,7 @@ func (d *FirejailDriverPlugin) buildFingerprint() *drivers.Fingerprint {
 		HealthDescription: drivers.DriverHealthy,
 	}
 
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS != "linux" {
 		fp.Health = drivers.HealthStateUndetected
 		fp.HealthDescription = "firejail driver only supported on Linux"
 		return fp
@@ -278,7 +278,7 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 
 	var driverConfig TaskConfig
 	if err := cfg.DecodeDriverConfig(&driverConfig); err != nil {
-		return nil, nil, fmt.Errorf("failed to decode driver config: %v", err)
+		return nil, nil, fmt.Errorf("starting task: failed to decode driver config: %v", err)
 	}
 
 	d.logger.Info("starting task", "driver_cfg", hclog.Fmt("%+v", driverConfig))
@@ -382,7 +382,7 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 
 	var driverConfig TaskConfig
 	if err := taskState.TaskConfig.DecodeDriverConfig(&driverConfig); err != nil {
-		return fmt.Errorf("failed to decode driver config: %v", err)
+		return fmt.Errorf("recovering task: failed to decode driver config: %v", err)
 	}
 
 	plugRC, err := structs.ReattachConfigToGoPlugin(taskState.ReattachConfig)
@@ -531,12 +531,6 @@ func (d *FirejailDriverPlugin) SignalTask(taskID string, signal string) error {
 	if !ok {
 		return drivers.ErrTaskNotFound
 	}
-
-	// TODO: implement driver specific signal handling logic.
-	//
-	// The given signal must be forwarded to the target taskID. If this plugin
-	// doesn't support receiving signals (capability SendSignals is set to
-	// false) you can just return nil.
 	sig := os.Interrupt
 	if s, ok := signals.SignalLookup[signal]; ok {
 		sig = s
@@ -550,6 +544,5 @@ func (d *FirejailDriverPlugin) SignalTask(taskID string, signal string) error {
 // ExecTask returns the result of executing the given command inside a task.
 // This is an optional capability.
 func (d *FirejailDriverPlugin) ExecTask(taskID string, cmd []string, timeout time.Duration) (*drivers.ExecTaskResult, error) {
-	// TODO: implement driver specific logic to execute commands in a task.
 	return nil, fmt.Errorf("This driver does not support exec")
 }
