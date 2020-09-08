@@ -497,7 +497,6 @@ func (d *FirejailDriverPlugin) InspectTask(taskID string) (*drivers.TaskStatus, 
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
 	}
-
 	return handle.TaskStatus(), nil
 }
 
@@ -507,15 +506,6 @@ func (d *FirejailDriverPlugin) TaskStats(ctx context.Context, taskID string, int
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
 	}
-
-	// TODO: implement driver specific logic to send task stats.
-	//
-	// This function returns a channel that Nomad will use to listen for task
-	// stats (e.g., CPU and memory usage) in a given interval. It should send
-	// stats until the context is canceled or the task stops running.
-	//
-	// In the example below we use the Stats function provided by the executor,
-	// but you can build a set of functions similar to the fingerprint process.
 	return handle.exec.Stats(ctx, interval)
 }
 
