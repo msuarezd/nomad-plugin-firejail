@@ -1,4 +1,4 @@
-package exec
+package firejail
 
 import (
 	"bytes"
