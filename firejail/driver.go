@@ -31,7 +31,7 @@ const (
 
 	// pluginVersion allows the client to identify and use newer versions of
 	// an installed plugin
-	pluginVersion = "v0.0.1"
+	pluginVersion = "v0.0.2"
 
 	// fingerprintPeriod is the interval at which the plugin will send
 	// fingerprint responses
@@ -79,10 +79,12 @@ var (
 	capabilities = &drivers.Capabilities{
 		SendSignals: true,
 		Exec:        false,
+		FSIsolation: drivers.FSIsolationNone,
 		NetIsolationModes: []drivers.NetIsolationMode{
 			drivers.NetIsolationModeHost,
 			drivers.NetIsolationModeGroup,
 		},
+		MountConfigs: drivers.MountConfigSupportAll,
 	}
 )
 
@@ -112,7 +114,7 @@ type TaskState struct {
 
 // HelloDriverPlugin is an example driver plugin. When provisioned in a job,
 // the taks will output a greet specified by the user.
-type FirejailDriverPlugin struct {
+type Driver struct {
 	// eventer is used to handle multiplexing of TaskEvents calls such that an
 	// event can be broadcast to all callers
 	eventer *eventer.Eventer
@@ -142,8 +144,7 @@ type FirejailDriverPlugin struct {
 func NewPlugin(logger log.Logger) drivers.DriverPlugin {
 	ctx, cancel := context.WithCancel(context.Background())
 	logger = logger.Named(pluginName)
-
-	return &FirejailDriverPlugin{
+	return &Driver{
 		eventer:        eventer.NewEventer(ctx, logger),
 		config:         &Config{},
 		tasks:          newTaskStore(),
@@ -154,17 +155,17 @@ func NewPlugin(logger log.Logger) drivers.DriverPlugin {
 }
 
 // PluginInfo returns information describing the plugin.
-func (d *FirejailDriverPlugin) PluginInfo() (*base.PluginInfoResponse, error) {
+func (d *Driver) PluginInfo() (*base.PluginInfoResponse, error) {
 	return pluginInfo, nil
 }
 
 // ConfigSchema returns the plugin configuration schema.
-func (d *FirejailDriverPlugin) ConfigSchema() (*hclspec.Spec, error) {
+func (d *Driver) ConfigSchema() (*hclspec.Spec, error) {
 	return configSpec, nil
 }
 
 // SetConfig is called by the client to pass the configuration for the plugin.
-func (d *FirejailDriverPlugin) SetConfig(cfg *base.Config) error {
+func (d *Driver) SetConfig(cfg *base.Config) error {
 	var config Config
 	if len(cfg.PluginConfig) != 0 {
 		if err := base.MsgPackDecode(cfg.PluginConfig, &config); err != nil {
@@ -199,26 +200,31 @@ func (d *FirejailDriverPlugin) SetConfig(cfg *base.Config) error {
 	return nil
 }
 
+func (d *Driver) Shutdown(ctx context.Context) error {
+	d.signalShutdown()
+	return nil
+}
+
 // TaskConfigSchema returns the HCL schema for the configuration of a task.
-func (d *FirejailDriverPlugin) TaskConfigSchema() (*hclspec.Spec, error) {
+func (d *Driver) TaskConfigSchema() (*hclspec.Spec, error) {
 	return taskConfigSpec, nil
 }
 
 // Capabilities returns the features supported by the driver.
-func (d *FirejailDriverPlugin) Capabilities() (*drivers.Capabilities, error) {
+func (d *Driver) Capabilities() (*drivers.Capabilities, error) {
 	return capabilities, nil
 }
 
 // Fingerprint returns a channel that will be used to send health information
 // and other driver specific node attributes.
-func (d *FirejailDriverPlugin) Fingerprint(ctx context.Context) (<-chan *drivers.Fingerprint, error) {
+func (d *Driver) Fingerprint(ctx context.Context) (<-chan *drivers.Fingerprint, error) {
 	ch := make(chan *drivers.Fingerprint)
 	go d.handleFingerprint(ctx, ch)
 	return ch, nil
 }
 
 // handleFingerprint manages the channel and the flow of fingerprint data.
-func (d *FirejailDriverPlugin) handleFingerprint(ctx context.Context, ch chan<- *drivers.Fingerprint) {
+func (d *Driver) handleFingerprint(ctx context.Context, ch chan<- *drivers.Fingerprint) {
 	defer close(ch)
 
 	// Nomad expects the initial fingerprint to be sent immediately
@@ -239,7 +245,7 @@ func (d *FirejailDriverPlugin) handleFingerprint(ctx context.Context, ch chan<- 
 }
 
 // buildFingerprint returns the driver's fingerprint data
-func (d *FirejailDriverPlugin) buildFingerprint() *drivers.Fingerprint {
+func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 	fp := &drivers.Fingerprint{
 		Attributes:        map[string]*structs.Attribute{},
 		Health:            drivers.HealthStateHealthy,
@@ -271,7 +277,7 @@ func (d *FirejailDriverPlugin) buildFingerprint() *drivers.Fingerprint {
 }
 
 // StartTask returns a task handle and a driver network if necessary.
-func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drivers.DriverNetwork, error) {
+func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drivers.DriverNetwork, error) {
 	if _, ok := d.tasks.Get(cfg.ID); ok {
 		return nil, nil, fmt.Errorf("task with ID %q already started", cfg.ID)
 	}
@@ -317,9 +323,12 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 		User:             user,
 		ResourceLimits:   true,
 		Resources:        cfg.Resources,
+		NoPivotRoot:      true,
 		TaskDir:          cfg.TaskDir().Dir,
 		StdoutPath:       cfg.StdoutPath,
 		StderrPath:       cfg.StderrPath,
+		Mounts:           cfg.Mounts,
+		Devices:          cfg.Devices,
 		NetworkIsolation: cfg.NetworkIsolation,
 	}
 
@@ -328,7 +337,7 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 		pluginClient.Kill()
 		return nil, nil, fmt.Errorf("failed to launch command with executor: %v", err)
 	}
-	d.logger.Info("task started with pid %d", ps.Pid)
+	d.logger.Info("task started", "PID", ps.Pid)
 
 	h := &taskHandle{
 		exec:         exec,
@@ -360,9 +369,8 @@ func (d *FirejailDriverPlugin) StartTask(cfg *drivers.TaskConfig) (*drivers.Task
 }
 
 // RecoverTask recreates the in-memory state of a task from a TaskHandle.
-func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
+func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	if handle == nil {
-		d.logger.Error("handle cannot be nil")
 		return fmt.Errorf("error: handle cannot be nil")
 	}
 
@@ -376,27 +384,28 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 
 	var taskState TaskState
 	if err := handle.GetDriverState(&taskState); err != nil {
-		d.logger.Error("failed to decode task state from handle", "error", err, "task_id", handle.Config.ID)
-		return fmt.Errorf("failed to decode task state from handle: %v", err)
+		return fmt.Errorf("RecoverTask: failed to decode task state from handle: %v", err)
 	}
+	d.logger.Debug("RecoverTask: decoded task state from handle", "task_id", handle.Config.ID)
 
 	var driverConfig TaskConfig
 	if err := taskState.TaskConfig.DecodeDriverConfig(&driverConfig); err != nil {
-		return fmt.Errorf("recovering task: failed to decode driver config: %v", err)
+		return fmt.Errorf("RecoverTask: failed to decode driver config: %v", err)
 	}
+	d.logger.Debug("RecoverTask: decoded driver config", "driver_cfg", hclog.Fmt("%+v", driverConfig))
 
 	plugRC, err := structs.ReattachConfigToGoPlugin(taskState.ReattachConfig)
 	if err != nil {
-		d.logger.Error("failed to build ReattachConfig from task state", "error", err, "task_id", handle.Config.ID)
-		return fmt.Errorf("failed to build ReattachConfig from taskConfig state: %v", err)
+		return fmt.Errorf("RecoverTask: failed to build ReattachConfig from taskConfig state: %v", err)
 	}
+	d.logger.Debug("RecoverTask: reattached config from task state", "task_id", handle.Config.ID)
 
 	execImpl, pluginClient, err := executor.ReattachToExecutor(plugRC,
 		d.logger.With("task_name", handle.Config.Name, "alloc_id", handle.Config.AllocID))
 	if err != nil {
-		d.logger.Error("failed to reattach to executor", "error", err, "task_id", handle.Config.ID)
-		return fmt.Errorf("failed to reattach to executor: %v", err)
+		return fmt.Errorf("RecoverTask: failed to reattach to executor: %v", err)
 	}
+	d.logger.Debug("RecoverTask: reattached to executor, task_id", handle.Config.ID)
 
 	h := &taskHandle{
 		exec:         execImpl,
@@ -406,16 +415,16 @@ func (d *FirejailDriverPlugin) RecoverTask(handle *drivers.TaskHandle) error {
 		procState:    drivers.TaskStateRunning,
 		startedAt:    taskState.StartedAt,
 		exitResult:   &drivers.ExitResult{},
+		logger:       d.logger,
 	}
 
 	d.tasks.Set(taskState.TaskConfig.ID, h)
-
 	go h.run()
 	return nil
 }
 
 // WaitTask returns a channel used to notify Nomad when a task exits.
-func (d *FirejailDriverPlugin) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.ExitResult, error) {
+func (d *Driver) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.ExitResult, error) {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
@@ -426,7 +435,7 @@ func (d *FirejailDriverPlugin) WaitTask(ctx context.Context, taskID string) (<-c
 	return ch, nil
 }
 
-func (d *FirejailDriverPlugin) handleWait(ctx context.Context, handle *taskHandle, ch chan *drivers.ExitResult) {
+func (d *Driver) handleWait(ctx context.Context, handle *taskHandle, ch chan *drivers.ExitResult) {
 	defer close(ch)
 	var result *drivers.ExitResult
 	ps, err := handle.exec.Wait(ctx)
@@ -453,7 +462,7 @@ func (d *FirejailDriverPlugin) handleWait(ctx context.Context, handle *taskHandl
 }
 
 // StopTask stops a running task with the given signal and within the timeout window.
-func (d *FirejailDriverPlugin) StopTask(taskID string, timeout time.Duration, signal string) error {
+func (d *Driver) StopTask(taskID string, timeout time.Duration, signal string) error {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return drivers.ErrTaskNotFound
@@ -469,7 +478,7 @@ func (d *FirejailDriverPlugin) StopTask(taskID string, timeout time.Duration, si
 }
 
 // DestroyTask cleans up and removes a task that has terminated.
-func (d *FirejailDriverPlugin) DestroyTask(taskID string, force bool) error {
+func (d *Driver) DestroyTask(taskID string, force bool) error {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return drivers.ErrTaskNotFound
@@ -483,7 +492,6 @@ func (d *FirejailDriverPlugin) DestroyTask(taskID string, force bool) error {
 		if err := handle.exec.Shutdown("", 0); err != nil {
 			handle.logger.Error("destroying executor failed", "err", err)
 		}
-
 		handle.pluginClient.Kill()
 	}
 
@@ -492,7 +500,7 @@ func (d *FirejailDriverPlugin) DestroyTask(taskID string, force bool) error {
 }
 
 // InspectTask returns detailed status information for the referenced taskID.
-func (d *FirejailDriverPlugin) InspectTask(taskID string) (*drivers.TaskStatus, error) {
+func (d *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
@@ -501,7 +509,7 @@ func (d *FirejailDriverPlugin) InspectTask(taskID string) (*drivers.TaskStatus, 
 }
 
 // TaskStats returns a channel which the driver should send stats to at the given interval.
-func (d *FirejailDriverPlugin) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *drivers.TaskResourceUsage, error) {
+func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *drivers.TaskResourceUsage, error) {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return nil, drivers.ErrTaskNotFound
@@ -510,13 +518,13 @@ func (d *FirejailDriverPlugin) TaskStats(ctx context.Context, taskID string, int
 }
 
 // TaskEvents returns a channel that the plugin can use to emit task related events.
-func (d *FirejailDriverPlugin) TaskEvents(ctx context.Context) (<-chan *drivers.TaskEvent, error) {
+func (d *Driver) TaskEvents(ctx context.Context) (<-chan *drivers.TaskEvent, error) {
 	return d.eventer.TaskEvents(ctx)
 }
 
 // SignalTask forwards a signal to a task.
 // This is an optional capability.
-func (d *FirejailDriverPlugin) SignalTask(taskID string, signal string) error {
+func (d *Driver) SignalTask(taskID string, signal string) error {
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return drivers.ErrTaskNotFound
@@ -533,6 +541,6 @@ func (d *FirejailDriverPlugin) SignalTask(taskID string, signal string) error {
 
 // ExecTask returns the result of executing the given command inside a task.
 // This is an optional capability.
-func (d *FirejailDriverPlugin) ExecTask(taskID string, cmd []string, timeout time.Duration) (*drivers.ExecTaskResult, error) {
-	return nil, fmt.Errorf("This driver does not support exec")
+func (d *Driver) ExecTask(taskID string, cmd []string, timeout time.Duration) (*drivers.ExecTaskResult, error) {
+	return nil, fmt.Errorf("Firejail driver does not support exec")
 }

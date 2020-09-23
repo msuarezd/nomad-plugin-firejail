@@ -17,8 +17,7 @@ import (
 // data if this driver deals with external APIs
 type taskHandle struct {
 	// stateLock syncs access to all fields below
-	stateLock sync.RWMutex
-
+	stateLock    sync.RWMutex
 	logger       hclog.Logger
 	exec         executor.Executor
 	pluginClient *plugin.Client
