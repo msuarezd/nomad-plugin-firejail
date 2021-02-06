@@ -12,9 +12,9 @@ require (
 	github.com/hashicorp/consul-template v0.25.1
 	github.com/hashicorp/go-hclog v0.14.1
 	github.com/hashicorp/go-plugin v1.0.2-0.20191004171845-809113480b55
-	github.com/hashicorp/nomad v0.12.3
+	github.com/hashicorp/nomad v1.0.3
 	github.com/mitchellh/go-ps v1.0.0 // indirect
-	github.com/stretchr/testify v1.5.1
+	github.com/stretchr/testify v1.6.1
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635 // indirect
 	github.com/ugorji/go v0.0.0-00010101000000-000000000000 // indirect
 	github.com/zclconf/go-cty v1.6.1 // indirect
