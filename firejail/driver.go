@@ -31,7 +31,7 @@ const (
 
 	// pluginVersion allows the client to identify and use newer versions of
 	// an installed plugin
-	pluginVersion = "v0.0.2"
+	pluginVersion = "v0.0.3"
 
 	// fingerprintPeriod is the interval at which the plugin will send
 	// fingerprint responses
@@ -317,19 +317,20 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	cmd = append(cmd, driverConfig.Args...)
 
 	execCmd := &executor.ExecCommand{
-		Cmd:              d.config.FirejailPath,
-		Args:             cmd,
-		Env:              cfg.EnvList(),
-		User:             user,
-		ResourceLimits:   true,
-		Resources:        cfg.Resources,
-		NoPivotRoot:      true,
-		TaskDir:          cfg.TaskDir().Dir,
-		StdoutPath:       cfg.StdoutPath,
-		StderrPath:       cfg.StderrPath,
-		Mounts:           cfg.Mounts,
-		Devices:          cfg.Devices,
-		NetworkIsolation: cfg.NetworkIsolation,
+		Cmd:                d.config.FirejailPath,
+		Args:               cmd,
+		User:               user,
+		NoPivotRoot:        true,
+		ResourceLimits:     true,
+		BasicProcessCgroup: true,
+		Resources:          cfg.Resources,
+		Env:                cfg.EnvList(),
+		TaskDir:            cfg.TaskDir().Dir,
+		StdoutPath:         cfg.StdoutPath,
+		StderrPath:         cfg.StderrPath,
+		Mounts:             cfg.Mounts,
+		Devices:            cfg.Devices,
+		NetworkIsolation:   cfg.NetworkIsolation,
 	}
 
 	ps, err := exec.Launch(execCmd)
@@ -345,7 +346,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		pluginClient: pluginClient,
 		taskConfig:   cfg,
 		procState:    drivers.TaskStateRunning,
-		startedAt:    time.Now().Round(time.Millisecond),
+		startedAt:    ps.Time,
 		logger:       d.logger,
 	}
 
@@ -387,12 +388,6 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 		return fmt.Errorf("RecoverTask: failed to decode task state from handle: %v", err)
 	}
 	d.logger.Debug("RecoverTask: decoded task state from handle", "task_id", handle.Config.ID)
-
-	var driverConfig TaskConfig
-	if err := taskState.TaskConfig.DecodeDriverConfig(&driverConfig); err != nil {
-		return fmt.Errorf("RecoverTask: failed to decode driver config: %v", err)
-	}
-	d.logger.Debug("RecoverTask: decoded driver config", "driver_cfg", hclog.Fmt("%+v", driverConfig))
 
 	plugRC, err := structs.ReattachConfigToGoPlugin(taskState.ReattachConfig)
 	if err != nil {
